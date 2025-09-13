@@ -12,8 +12,8 @@
 
 ## 🚀 使用方法
 
-1.在桌面网页端DeepSeek官网中，点击 `系统设置`
-2.点击 `数据管理`，点击 `导出所有历史对话`
+1. 在桌面网页端DeepSeek官网中，点击 `系统设置`
+2. 点击 `数据管理`，点击 `导出所有历史对话`
 3. 解压文件，将 `conversations.json` 与 `deepseek_exporter.py` 置于同一目录下
 4. 运行 `python deepseek_exporter.py`
 5. 查看 `DeepSeek_Conversations/` 目录中的结果
