@@ -1,10 +1,3 @@
-"""
-DeepSeek对话导出工具 - 终极版
-功能：将DeepSeek导出的conversations.json转换为Markdown文件
-作者：DeepSeek & 热心用户
-版本：2.0
-"""
-
 import json
 import os
 import re
