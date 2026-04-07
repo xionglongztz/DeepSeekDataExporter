@@ -30,7 +30,7 @@ def count_messages(mapping):
     return count
 
 def extract_message_content(message_node):
-    """从消息节点中提取用户提问和AI回复"""
+    """从消息节点中提取用户提问和AI回复，忽略工具调用片段（TOOL_SEARCH, TOOL_OPEN等）"""
     if not message_node or not message_node.get("fragments"):
         return {"user_question": "", "ai_thoughts": [], "ai_responses": []}
     
@@ -50,6 +50,12 @@ def extract_message_content(message_node):
         elif fragment_type == "RESPONSE":
             if content:
                 ai_responses.append(content)
+        # 显式忽略工具调用类型的片段（无内容，无需处理）
+        elif fragment_type in ("TOOL_SEARCH", "TOOL_OPEN"):
+            # 直接跳过，不做任何处理
+            pass
+        # 其他未知类型也忽略（保持向后兼容）
+        # else: pass
     
     return {
         "user_question": user_question,
@@ -114,13 +120,11 @@ def build_conversation_flow(mapping, log_message=None):
 def generate_markdown(conversation, output_dir, log_message=None):
     """为单个对话生成Markdown文件"""
     
-    # 如果没有提供日志函数，使用默认的空函数
     if log_message is None:
         def log_message(msg):
             pass
     
     def create_anchor(node_id):
-        """创建有效的Markdown锚点"""
         anchor = re.sub(r'[^\w\-_]', '-', node_id)
         return anchor
     
@@ -134,16 +138,13 @@ def generate_markdown(conversation, output_dir, log_message=None):
     log_message(f"  - 对话ID: {conversation_id}")
     log_message(f"  - 映射节点数量: {len(mapping)}")
     
-    # 计算消息数量
     message_count = count_messages(mapping)
     log_message(f"  - 有效消息数量: {message_count}")
     
-    # 创建文件名
     safe_title = sanitize_filename(title)
     filename = f"{safe_title}.md"
     filepath = os.path.join(output_dir, filename)
     
-    # 处理重复文件名
     counter = 1
     original_filepath = filepath
     while os.path.exists(filepath):
@@ -151,27 +152,19 @@ def generate_markdown(conversation, output_dir, log_message=None):
         filepath = f"{name}_{counter}{ext}"
         counter += 1
     
-    # 构建对话流程
     log_message(f"  - 开始构建对话流程")
     conversation_flow = build_conversation_flow(mapping, log_message)
     log_message(f"  - 对话流程构建完成，共 {len(conversation_flow)} 个节点")
     
-    # 生成Markdown内容
     md_content = []
-    
-    # 标题
     md_content.append(f"# 💬 {title}\n")
-    
-    # 会话信息
     md_content.append("## 📋 会话信息\n")
     md_content.append(f"- **🗂️ ID**: `{conversation_id}`")
     md_content.append(f"- **🕐 创建时间**: {parse_timestamp(inserted_at).strftime('%Y-%m-%d %H:%M:%S')}")
     md_content.append(f"- **🔄 更新时间**: {parse_timestamp(updated_at).strftime('%Y-%m-%d %H:%M:%S')}")
     md_content.append(f"- **💭 消息数量**: {message_count} 条\n")
-    
     md_content.append("---\n")
     
-    # 对话内容
     log_message(f"  - 开始生成Markdown内容")
     for i, item in enumerate(conversation_flow):
         node = item["node"]
@@ -182,28 +175,21 @@ def generate_markdown(conversation, output_dir, log_message=None):
         # 用户提问
         if item["is_user"] and message_data["user_question"]:
             md_content.append(f"\n## 👤 用户")
-            #md_content.append(f"\n## 👤 用户 <a id=\"{create_anchor(node['id'])}\"></a>\n")
             md_content.append(f"{message_data['user_question']}\n")
             
-            # 搜索信息（如果有）
+            # 搜索信息（仅旧格式）
             search_results = []
             for fragment in node.get("message", {}).get("fragments", []):
                 if fragment.get("type") == "SEARCH" and fragment.get("results"):
                     search_results = fragment["results"]
                     break
-    
             if search_results:
                 md_content.append(f"\n**🌐 网页**(共 {len(search_results)} 个):")
-                # 安全排序搜索结查
                 try:
                     search_results.sort(key=lambda x: x.get("cite_index", 0) or 0)
-                    log_message(f"    - 节点 {node['id']}: 成功排序 {len(search_results)} 个搜索结果")
-                except Exception as e:
-                    log_message(f"    - 节点 {node['id']}: 搜索结果排序失败: {e}")
-                    # 保持原顺序
-        
+                except:
+                    pass
                 for result in search_results:
-                    # 转换时间戳
                     published_at = result.get("published_at")
                     if published_at:
                         try:
@@ -212,128 +198,84 @@ def generate_markdown(conversation, output_dir, log_message=None):
                             date_str = "未知日期"
                     else:
                         date_str = "未知日期"
-            
                     site_name = result.get("site_name", "未知网站")
-                    title = result.get("title", "无标题")
+                    title_tmp = result.get("title", "无标题")
                     url = result.get("url", "")
                     snippet = result.get("snippet", "")
-            
                     md_content.append("> **网站**: " + site_name + f" `{date_str}`")
-                    md_content.append("> **标题**: " + title)
+                    md_content.append("> **标题**: " + title_tmp)
                     if url:
                         md_content.append("> **网址**: `" + url + "`")
                     if snippet:
                         md_content.append("> **摘要**:")
-                        # 处理摘要内容，确保每行都在引用块内
                         snippet_lines = snippet.split('\n')
                         for line in snippet_lines:
                             if line.strip():
                                 md_content.append(">> " + line)
-                    md_content.append(">")  # 空行分隔
+                    md_content.append(">")
             
-            # 文件信息（如果有）
+            # 附件
             files = node.get("message", {}).get("files", [])
             if files:
                 md_content.append("\n**📎 附件**:")
                 for file_info in files:
-                    # 提取文件信息
                     file_id = file_info.get('id', '未知ID')
                     file_name = file_info.get('file_name', '未知文件名')
                     file_content = file_info.get('content', '')
-        
-                    # 第一层引用：文件信息
                     md_content.append("> 🆔 **文件ID**: `" + file_id + "`")
                     md_content.append("> 📄 **文件名**: `" + file_name + "`")
-        
-                    # 如果有文件内容
                     if file_content:
                         md_content.append("> 📋 **文件内容**:")
-                        # 根据文件后缀确定代码块语言
                         file_extension = os.path.splitext(file_name)[1].lower().lstrip('.')
-                        # 常见文件类型的映射
-                        extension_map = {
-                            'py': 'python',
-                            'js': 'javascript',
-                            'java': 'java',
-                            'cpp': 'cpp',
-                            'c': 'c',
-                            'html': 'html',
-                            'css': 'css',
-                            'json': 'json',
-                            'xml': 'xml',
-                            'md': 'markdown',
-                            'txt': 'text',
-                            'log': 'text',
-                            'csv': 'csv',
-                            'sql': 'sql',
-                            'sh': 'bash',
-                            'bat': 'batch',
-                            'yml': 'yaml',
-                            'yaml': 'yaml',
+                        ext_map = {
+                            'py': 'python', 'js': 'javascript', 'java': 'java',
+                            'cpp': 'cpp', 'c': 'c', 'html': 'html', 'css': 'css',
+                            'json': 'json', 'xml': 'xml', 'md': 'markdown',
+                            'txt': 'text', 'log': 'text', 'csv': 'csv', 'sql': 'sql',
+                            'sh': 'bash', 'bat': 'batch', 'yml': 'yaml', 'yaml': 'yaml',
                             'vb': 'vb.net'
                         }
-                        code_lang = extension_map.get(file_extension, 'text')
+                        code_lang = ext_map.get(file_extension, 'text')
                         md_content.append(f"> ```{code_lang}")
-                        # 统一换行符，避免多余空行
                         normalized_content = file_content.replace('\r\n', '\n').replace('\r', '\n')
-                        # 将内容按行分割并逐行添加到代码块中
-                        content_lines = normalized_content.split('\n')
-                        for line in content_lines:
+                        for line in normalized_content.split('\n'):
                             md_content.append("> " + line)
                         md_content.append("> ```")
             
             md_content.append(f"\n*🆔 {node['id']} | 🕐 {timestamp}*")
             
-            # 添加节点关系信息
             parent_id = node.get('parent')
             children_ids = node.get('children', [])
-            
             if parent_id or children_ids:
-                # 构建节点关系字符串
                 relation_parts = []
-    
-                # 创建父节点链接（如果存在）
                 if parent_id and parent_id != "root":
                     parent_anchor = create_anchor(parent_id)
                     relation_parts.append(f"父节点: [{parent_id}](#{parent_anchor})")
                 elif parent_id == "root":
                     relation_parts.append(f"父节点: {parent_id}")
-    
-                # 创建子节点链接（如果存在）
                 if children_ids:
-                    children_links = []
-                    for child_id in children_ids:
-                        child_anchor = create_anchor(child_id)
-                        children_links.append(f"[{child_id}](#{child_anchor})")
+                    children_links = [f"[{cid}](#{create_anchor(cid)})" for cid in children_ids]
                     relation_parts.append(f"子节点: {', '.join(children_links)}")
-    
                 md_content.append(f"\n**🔗 节点关系:** { ' | '.join(relation_parts) }")
-            
             md_content.append("\n---\n")
         
-        # AI回复部分
+        # AI回复部分（修改重点）
         if item["is_ai"] and (message_data["ai_thoughts"] or message_data["ai_responses"]):
             md_content.append(f"\n## 🤖 回复")
-            #md_content.append(f"\n## 🤖 回复 <a id=\"{create_anchor(node['id'])}\"></a>\n")
-            # 搜索信息（如果有）- 在思考之前显示搜索结果
+            
+            # 搜索信息（仅旧格式）
             search_results = []
             for fragment in node.get("message", {}).get("fragments", []):
                 if fragment.get("type") == "SEARCH" and fragment.get("results"):
                     search_results = fragment["results"]
                     break
-    
             if search_results:
                 md_content.append(f"\n**🌐 网页**(共 {len(search_results)} 个):")
-                # 安全排序搜索结果
                 try:
                     search_results.sort(key=lambda x: x.get("cite_index", 0) or 0)
-                    log_message(f"    - 节点 {node['id']}: 成功排序 {len(search_results)} 个搜索结果")
-                except Exception as e:
-                    log_message(f"    - 节点 {node['id']}: 搜索结果排序失败: {e}")
-                    # 保持原顺序
-        
+                except:
+                    pass
                 for result in search_results:
-                    # 转换时间戳
                     published_at = result.get("published_at")
                     if published_at:
                         try:
@@ -342,89 +284,64 @@ def generate_markdown(conversation, output_dir, log_message=None):
                             date_str = "未知日期"
                     else:
                         date_str = "未知日期"
-            
                     site_name = result.get("site_name", "未知网站")
-                    title = result.get("title", "无标题")
+                    title_tmp = result.get("title", "无标题")
                     url = result.get("url", "")
                     snippet = result.get("snippet", "")
-            
                     md_content.append("> **网站**: " + site_name + f" `{date_str}`")
-                    # 将标题改为超链接格式
                     if url:
-                        md_content.append("> **标题**: [" + title + "](" + url + ")")
+                        md_content.append("> **标题**: [" + title_tmp + "](" + url + ")")
                     else:
-                        md_content.append("> **标题**: " + title)
+                        md_content.append("> **标题**: " + title_tmp)
                     if snippet:
                         md_content.append("> **摘要**: `" + snippet + "`")
-                    md_content.append("\n")  # 空行分隔
-
-            # 将思考内容和回复内容配对处理
+                    md_content.append("\n")
+            
+            # ========== 核心修改：合并所有思考内容，然后输出回复 ==========
             thoughts = message_data["ai_thoughts"]
             responses = message_data["ai_responses"]
-
-            # 确保思考内容和回复内容数量匹配（通常是一对一）
-            max_pairs = max(len(thoughts), len(responses))
-
-            for pair_index in range(max_pairs):
-                # 如果是第二个及以后的回复对，添加分隔线
-                if pair_index > 0:
-                    md_content.append("\n---\n\n")
-
-                # 当前对的思考内容
-                if pair_index < len(thoughts):
-                    thought = thoughts[pair_index]
-                    # 保持思考内容的引用格式，正确处理换行
+            
+            # 输出所有思考内容（合并为一个连续引用块）
+            if thoughts:
+                md_content.append(f"\n**💭 思考**：")
+                for idx, thought in enumerate(thoughts):
+                    if idx > 0:
+                        md_content.append("")  # 思考片段之间空行（保持引用块连续性）
                     thought_lines = thought.split('\n')
-                    md_content.append(f"\n**💭 思考**:")
-                    md_content.append("> " + thought_lines[0])
-                    for line in thought_lines[1:]:
+                    for line in thought_lines:
                         md_content.append("> " + line)
-                    md_content.append(">\n")  # 空行结束思考
-
-                # 当前对的回复内容
-                if pair_index < len(responses):
-                    response = responses[pair_index]
+                md_content.append("")  # 思考结束后空一行（退出引用块）
+            
+            # 输出所有回复内容（通常只有一个 RESPONSE）
+            if responses:
+                for response in responses:
                     md_content.append(f"{response}\n")
-
+            # ============================================================
+            
             model = node.get("message", {}).get("model", "未知模型")
             md_content.append(f"\n*🆔 {node['id']} | 🧠 {model} | 🕐 {timestamp}*")
             
-            # 添加节点关系信息
             parent_id = node.get('parent')
             children_ids = node.get('children', [])
-            
             if parent_id or children_ids:
-                # 构建节点关系字符串
                 relation_parts = []
-    
-                # 创建父节点链接（如果存在）
                 if parent_id and parent_id != "root":
                     parent_anchor = create_anchor(parent_id)
                     relation_parts.append(f"父节点: [{parent_id}](#{parent_anchor})")
                 elif parent_id == "root":
                     relation_parts.append(f"父节点: {parent_id}")
-    
-                # 创建子节点链接（如果存在）
                 if children_ids:
-                    children_links = []
-                    for child_id in children_ids:
-                        child_anchor = create_anchor(child_id)
-                        children_links.append(f"[{child_id}](#{child_anchor})")
+                    children_links = [f"[{cid}](#{create_anchor(cid)})" for cid in children_ids]
                     relation_parts.append(f"子节点: {', '.join(children_links)}")
-    
                 md_content.append(f"\n**🔗 节点关系:** { ' | '.join(relation_parts) }")
-            
             md_content.append("\n---\n")
     
-    # 文件尾部信息
     md_content.append(f"*📄 Markdown文件生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
     md_content.append("*使用DeepSeek导出工具生成*\n")
     
-    # 写入文件
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write('\n'.join(md_content))
     
-    # 尝试设置文件创建时间
     try:
         creation_time = parse_timestamp(inserted_at).timestamp()
         os.utime(filepath, (creation_time, creation_time))
@@ -479,7 +396,6 @@ def json_to_markdown_converter(json_file_path):
                 
                 title = conversation.get("title", f"对话_{i+1}")
                 
-                # 添加详细的调试信息到日志
                 log_message(f"正在处理对话 {i+1}/{total_conversations}: {title}")
                 log_message(f"对话ID: {conversation.get('id')}")
                 
@@ -489,7 +405,6 @@ def json_to_markdown_converter(json_file_path):
                 successful_conversions += 1
                 
             except Exception as e:
-                # 添加更详细的错误信息
                 import traceback
                 error_details = traceback.format_exc()
                 log_message(f"❌ 转换失败 - {conversation.get('title', f'对话_{i+1}')}: {str(e)}")
